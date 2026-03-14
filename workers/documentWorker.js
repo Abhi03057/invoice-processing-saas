@@ -13,29 +13,58 @@ const worker = new Worker(
 
     const { documentId, filePath } = job.data;
 
-    console.log("Processing document:", documentId);
+    try {
 
-    const extractedData = await parseInvoice(filePath);
+      console.log("Processing document:", documentId);
 
-    await pool.query(
-  `INSERT INTO invoice_data 
-   (document_id, invoice_number, invoice_date, amount)
-   VALUES ($1,$2,$3,$4)
-   ON CONFLICT (invoice_number) DO NOTHING`,
-  [
-    documentId,
-    extractedData.invoice_number,
-    extractedData.invoice_date,
-    extractedData.total
-  ]
-);
+      // 1️⃣ mark as processing
+      await pool.query(
+        "UPDATE documents SET status='processing' WHERE id=$1",
+        [documentId]
+      );
 
-    await pool.query(
-      "UPDATE documents SET status='processed', processed_at=NOW() WHERE id=$1",
-      [documentId]
-    );
+      // 2️⃣ parse invoice
+      const extractedData = await parseInvoice(filePath);
 
-    console.log("Finished processing:", documentId);
+      // 3️⃣ upsert invoice data
+      await pool.query(
+        `INSERT INTO invoice_data
+        (document_id, invoice_number, vendor, invoice_date, amount)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (invoice_number)
+        DO UPDATE SET
+          vendor = EXCLUDED.vendor,
+          invoice_date = EXCLUDED.invoice_date,
+          amount = EXCLUDED.amount,
+          document_id = EXCLUDED.document_id`,
+        [
+          documentId,
+          extractedData.invoice_number,
+          extractedData.vendor,
+          extractedData.invoice_date,
+          extractedData.total
+        ]
+      );
+
+      // 4️⃣ mark processed
+      await pool.query(
+        "UPDATE documents SET status='processed', processed_at=NOW() WHERE id=$1",
+        [documentId]
+      );
+
+      console.log("Finished processing:", documentId);
+
+    } catch (error) {
+
+      console.error("Processing failed:", error);
+
+      // 5️⃣ mark failed
+      await pool.query(
+        "UPDATE documents SET status='failed' WHERE id=$1",
+        [documentId]
+      );
+
+    }
 
   },
   { connection }
