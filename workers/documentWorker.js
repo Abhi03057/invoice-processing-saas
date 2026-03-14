@@ -9,7 +9,7 @@ const connection = new IORedis({
 
 const worker = new Worker(
   "document-processing",
-  async job => {
+  async (job) => {
 
     const { documentId, filePath } = job.data;
 
@@ -17,7 +17,7 @@ const worker = new Worker(
 
       console.log("Processing document:", documentId);
 
-      // 1️⃣ mark as processing
+      // 1️⃣ mark document as processing
       await pool.query(
         "UPDATE documents SET status='processing' WHERE id=$1",
         [documentId]
@@ -26,7 +26,19 @@ const worker = new Worker(
       // 2️⃣ parse invoice
       const extractedData = await parseInvoice(filePath);
 
-      // 3️⃣ upsert invoice data
+      console.log("Extracted data:", extractedData);
+
+      // 3️⃣ validate extraction
+      if (
+        !extractedData ||
+        (!extractedData.invoice_number &&
+         !extractedData.vendor &&
+         !extractedData.total)
+      ) {
+        throw new Error("Invoice parsing failed: no useful data extracted");
+      }
+
+      // 4️⃣ insert or update invoice data
       await pool.query(
         `INSERT INTO invoice_data
         (document_id, invoice_number, vendor, invoice_date, amount)
@@ -46,7 +58,7 @@ const worker = new Worker(
         ]
       );
 
-      // 4️⃣ mark processed
+      // 5️⃣ mark processed
       await pool.query(
         "UPDATE documents SET status='processed', processed_at=NOW() WHERE id=$1",
         [documentId]
@@ -56,16 +68,18 @@ const worker = new Worker(
 
     } catch (error) {
 
-      console.error("Processing failed:", error);
+      console.error("Processing failed for document:", documentId);
+      console.error(error.message);
 
-      // 5️⃣ mark failed
+      // 6️⃣ mark document failed
       await pool.query(
         "UPDATE documents SET status='failed' WHERE id=$1",
         [documentId]
       );
 
+      // throw error so BullMQ can retry the job
+      throw error;
     }
-
   },
   { connection }
 );

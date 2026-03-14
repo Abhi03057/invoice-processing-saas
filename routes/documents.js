@@ -11,8 +11,7 @@ const {
   getInvoices
 } = require("../controllers/documentController");
 
-router.post("/", authenticateToken, upload.single("file"), uploadDocument);
-
+router.post("/", authenticateToken, upload.array("files", 10), uploadDocument);
 router.get("/", authenticateToken, getDocuments);
 
 // IMPORTANT: this must come BEFORE :id
